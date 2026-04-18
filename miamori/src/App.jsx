@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import styles from "./App.module.css";
+import { db } from "./firebase.js";
+import { ref, onValue, set, push } from "firebase/database";
 
 const DEFAULT_PROFILE = { name: "田中 よし子", age: "78", address: "大阪府大阪市", memo: "" };
 const DEFAULT_CONTACTS = [
@@ -117,7 +119,6 @@ function GraphTab({ logs }) {
   const displayData = range === "week" ? data.slice(-7) : data;
   const avgScore = (displayData.reduce((s, d) => s + d.score, 0) / displayData.length).toFixed(1);
   const goodDays = displayData.filter(d => d.score >= 3).length;
-  const barH = 120;
   return (
     <>
       <p className={styles.sectionTitle}>📈 体調グラフ</p>
@@ -133,7 +134,7 @@ function GraphTab({ logs }) {
           <div className={styles.barChart}>
             {displayData.map((d, i) => (
               <div key={i} className={styles.barCol}>
-                <div className={styles.barTrack} style={{ height: barH }}>
+                <div className={styles.barTrack} style={{ height: 120 }}>
                   <div className={styles.bar} style={{ height: `${(d.score / 4) * 100}%`, background: HEALTH_COLOR[d.score] }} />
                 </div>
                 <span className={styles.barLabel}>{d.date}</span>
@@ -181,9 +182,12 @@ function GraphTab({ logs }) {
   );
 }
 
-function HomeTab({ profile, lastCheckin, health, meal, logs, onCheckin }) {
+function HomeTab({ profile, lastCheckin, health, meal, logs, onCheckin, syncStatus }) {
   return (
     <>
+      {syncStatus === "synced" && (
+        <div className={styles.syncBadge}>🔄 家族とリアルタイム同期中</div>
+      )}
       <div className={styles.checkinCard}>
         <p className={styles.checkinLabel}>{profile.name} の最終確認</p>
         <p className={styles.checkinLast}>{lastCheckin ? `本日 ${lastCheckin}` : "まだ確認されていません"}</p>
@@ -252,14 +256,14 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
   const [editing, setEditing] = useState(null);
   const [newC, setNewC]       = useState({ name: "", phone: "", relation: "" });
   const [showAdd, setShowAdd] = useState(false);
-  const saveProfile = () => { save("miamori_profile", profile); showToast("✅ プロフィールを保存しました"); };
+  const saveProfile = () => { save("miamori_profile", profile); set(ref(db, "profile"), profile); showToast("✅ プロフィールを保存しました"); };
   const saveNotif   = () => { save("miamori_notification", notification); showToast("🔔 通知設定を保存しました"); };
-  const deleteContact = id => { const u = contacts.filter(c => c.id !== id); setContacts(u); save("miamori_contacts", u); showToast("🗑️ 連絡先を削除しました"); };
-  const updateContact = c => { const u = contacts.map(x => x.id === c.id ? c : x); setContacts(u); save("miamori_contacts", u); setEditing(null); showToast("✅ 連絡先を更新しました"); };
+  const deleteContact = id => { const u = contacts.filter(c => c.id !== id); setContacts(u); save("miamori_contacts", u); set(ref(db, "contacts"), u); showToast("🗑️ 連絡先を削除しました"); };
+  const updateContact = c => { const u = contacts.map(x => x.id === c.id ? c : x); setContacts(u); save("miamori_contacts", u); set(ref(db, "contacts"), u); setEditing(null); showToast("✅ 連絡先を更新しました"); };
   const addContact = () => {
     if (!newC.name || !newC.phone) { showToast("名前と電話番号を入力してください"); return; }
     const u = [...contacts, { ...newC, id: Date.now() }];
-    setContacts(u); save("miamori_contacts", u);
+    setContacts(u); save("miamori_contacts", u); set(ref(db, "contacts"), u);
     setNewC({ name: "", phone: "", relation: "" }); setShowAdd(false);
     showToast("✅ 連絡先を追加しました");
   };
@@ -364,6 +368,7 @@ export default function App() {
   const [memo, setMemo]       = useState("");
   const [toast, setToast]     = useState("");
   const [toastVisible, setToastVisible] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("connecting");
   const [logs, setLogs]       = useState([
     { time: "09:12", text: "✅ 安否確認完了" },
     { time: "08:45", text: "☀️ 朝食：完食"  },
@@ -374,6 +379,39 @@ export default function App() {
   const [notification, setNotification] = useState(() => load("miamori_notification", DEFAULT_NOTIFICATION));
   const [themeId, setThemeId]           = useState(() => load("miamori_theme", "green"));
   const theme = THEMES.find(t => t.id === themeId) || THEMES[0];
+
+  // Firebase同期
+  useEffect(() => {
+    const logsRef = ref(db, "logs");
+    const unsub = onValue(logsRef, snapshot => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.values(data).sort((a, b) => b.ts - a.ts);
+        setLogs(arr);
+      }
+      setSyncStatus("synced");
+    }, () => setSyncStatus("offline"));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const profileRef = ref(db, "profile");
+    const unsub = onValue(profileRef, snapshot => {
+      const data = snapshot.val();
+      if (data) { setProfile(data); save("miamori_profile", data); }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const contactsRef = ref(db, "contacts");
+    const unsub = onValue(contactsRef, snapshot => {
+      const data = snapshot.val();
+      if (data) { setContacts(data); save("miamori_contacts", data); }
+    });
+    return () => unsub();
+  }, []);
+
   useEffect(() => {
     const r = document.documentElement;
     r.style.setProperty("--primary",      theme.primary);
@@ -381,35 +419,42 @@ export default function App() {
     r.style.setProperty("--bg",           theme.bg);
     r.style.setProperty("--card-bg",      theme.card);
   }, [themeId]);
+
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
+
   const showToast = msg => { setToast(msg); setToastVisible(true); setTimeout(() => setToastVisible(false), 2500); };
+
   const handleCheckin = () => {
     const t = fmt(new Date());
+    const entry = { time: t, text: "✅ 安否確認完了", ts: Date.now() };
+    push(ref(db, "logs"), entry);
     setLastCheckin(t);
-    setLogs(prev => [{ time: t, text: "✅ 安否確認完了" }, ...prev]);
-    showToast("✅ 安否確認を送信しました");
+    showToast("✅ 安否確認を家族に送信しました！");
   };
+
   const handleSaveHealth = () => {
     const t = fmt(new Date());
     const entries = [];
-    if (health) entries.push({ time: t, text: `😊 体調：${health}` });
-    if (meal)   entries.push({ time: t, text: `🍱 食事：${meal}`   });
-    if (memo)   entries.push({ time: t, text: `📝 ${memo}`         });
+    if (health) entries.push({ time: t, text: `😊 体調：${health}`, ts: Date.now() });
+    if (meal)   entries.push({ time: t, text: `🍱 食事：${meal}`,   ts: Date.now() + 1 });
+    if (memo)   entries.push({ time: t, text: `📝 ${memo}`,         ts: Date.now() + 2 });
     if (!entries.length) { showToast("記録する内容を選択してください"); return; }
-    setLogs(prev => [...entries, ...prev]);
-    setMemo(""); showToast("💾 記録を保存しました");
+    entries.forEach(e => push(ref(db, "logs"), e));
+    setMemo(""); showToast("💾 記録を家族と共有しました！");
   };
+
   return (
     <div className={styles.app}>
       <InstallBanner />
       <header className={styles.header}>
         <div className={styles.headerTop}>
           <div className={styles.appTitle}>みまもり<span>Care &amp; Connect</span></div>
-          <button className={styles.statusBadge} onClick={() => showToast(`接続中：${profile.name}`)}>
-            <span className={styles.statusDot} />接続中
+          <button className={styles.statusBadge} onClick={() => showToast(syncStatus === "synced" ? "🔄 家族とリアルタイム同期中" : "📡 接続中...")}>
+            <span className={styles.statusDot} style={{ background: syncStatus === "synced" ? "#7fff9f" : "#ffcc00" }} />
+            {syncStatus === "synced" ? "同期中" : "接続中"}
           </button>
         </div>
         <p className={styles.datetime}>{fmtDate(now)} {fmt(now)}</p>
@@ -423,10 +468,10 @@ export default function App() {
         ))}
       </nav>
       <main className={styles.content}>
-        {tab === "home"     && <HomeTab profile={profile} lastCheckin={lastCheckin} health={health} meal={meal} logs={logs} onCheckin={handleCheckin} />}
+        {tab === "home"     && <HomeTab profile={profile} lastCheckin={lastCheckin} health={health} meal={meal} logs={logs} onCheckin={handleCheckin} syncStatus={syncStatus} />}
         {tab === "health"   && <HealthTab health={health} meal={meal} memo={memo} logs={logs} setHealth={setHealth} setMeal={setMeal} setMemo={setMemo} onSave={handleSaveHealth} />}
         {tab === "graph"    && <GraphTab logs={logs} />}
-        {tab === "sos"      && <SosTab contacts={contacts} onSOS={() => showToast("🚨 緊急連絡先に通知を送りました！")} onCall={c => showToast(`📞 ${c.name}に発信中…`)} />}
+        {tab === "sos"      && <SosTab contacts={contacts} onSOS={() => { push(ref(db, "logs"), { time: fmt(new Date()), text: "🚨 SOSが送信されました！", ts: Date.now() }); showToast("🚨 緊急連絡先に通知を送りました！"); }} onCall={c => showToast(`📞 ${c.name}に発信中…`)} />}
         {tab === "settings" && <SettingsTab profile={profile} setProfile={setProfile} contacts={contacts} setContacts={setContacts} notification={notification} setNotification={setNotification} themeId={themeId} setThemeId={setThemeId} showToast={showToast} />}
       </main>
       <Toast message={toast} visible={toastVisible} />
