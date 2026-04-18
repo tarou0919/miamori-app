@@ -25,10 +25,32 @@ const LOCATION_HISTORY = [
   { icon: "🏥", name: "かかりつけ医",   time: "昨日 14:00" },
   { icon: "🌳", name: "近くの公園",     time: "昨日 9:45"  },
 ];
+
+const HEALTH_SCORE = { "良好": 4, "普通": 3, "やや不調": 2, "不調": 1 };
+const HEALTH_LABEL = { 4: "良好", 3: "普通", 2: "やや不調", 1: "不調" };
+const HEALTH_COLOR = { 4: "#4a7c59", 3: "#8bc34a", 2: "#ff9800", 1: "#e05252" };
+
+const SAMPLE_GRAPH_DATA = [
+  { date: "4/5",  score: 4, meal: "完食" },
+  { date: "4/6",  score: 3, meal: "完食" },
+  { date: "4/7",  score: 4, meal: "完食" },
+  { date: "4/8",  score: 4, meal: "半分" },
+  { date: "4/9",  score: 2, meal: "少し" },
+  { date: "4/10", score: 2, meal: "少し" },
+  { date: "4/11", score: 3, meal: "半分" },
+  { date: "4/12", score: 4, meal: "完食" },
+  { date: "4/13", score: 4, meal: "完食" },
+  { date: "4/14", score: 3, meal: "完食" },
+  { date: "4/15", score: 4, meal: "完食" },
+  { date: "4/16", score: 4, meal: "完食" },
+  { date: "4/17", score: 3, meal: "半分" },
+  { date: "4/18", score: 4, meal: "完食" },
+];
+
 const TAB_CONFIG = [
   { id: "home",     icon: "🏠", label: "ホーム"   },
   { id: "health",   icon: "💊", label: "健康記録" },
-  { id: "location", icon: "📍", label: "位置情報" },
+  { id: "graph",    icon: "📈", label: "グラフ"   },
   { id: "sos",      icon: "🆘", label: "緊急"     },
   { id: "settings", icon: "⚙️", label: "設定"     },
 ];
@@ -53,6 +75,109 @@ function LogList({ logs }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function InstallBanner() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const handler = e => { e.preventDefault(); setDeferredPrompt(e); setShow(true); };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+  const install = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    setShow(false);
+  };
+  if (!show) return null;
+  return (
+    <div className={styles.installBanner}>
+      <span>📱 ホーム画面に追加できます</span>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className={styles.installBtn} onClick={install}>追加</button>
+        <button className={styles.installDismiss} onClick={() => setShow(false)}>✕</button>
+      </div>
+    </div>
+  );
+}
+
+function GraphTab({ logs }) {
+  const [range, setRange] = useState("week");
+  const logData = logs
+    .filter(l => l.text.includes("体調："))
+    .map(l => {
+      const match = l.text.match(/体調：(.+)/);
+      const score = match ? (HEALTH_SCORE[match[1]] || 3) : 3;
+      return { date: l.time, score, meal: "—" };
+    });
+  const data = logData.length >= 3 ? logData.slice(0, 14).reverse() : SAMPLE_GRAPH_DATA;
+  const displayData = range === "week" ? data.slice(-7) : data;
+  const avgScore = (displayData.reduce((s, d) => s + d.score, 0) / displayData.length).toFixed(1);
+  const goodDays = displayData.filter(d => d.score >= 3).length;
+  const barH = 120;
+  return (
+    <>
+      <p className={styles.sectionTitle}>📈 体調グラフ</p>
+      <div className={styles.rangeToggle}>
+        <button className={`${styles.rangeBtn} ${range === "week" ? styles.rangeBtnActive : ""}`} onClick={() => setRange("week")}>1週間</button>
+        <button className={`${styles.rangeBtn} ${range === "two" ? styles.rangeBtnActive : ""}`} onClick={() => setRange("two")}>2週間</button>
+      </div>
+      <div className={styles.card}>
+        <div className={styles.graphWrap}>
+          <div className={styles.yAxis}>
+            {["良好", "普通", "不調"].map((l, i) => <span key={i} className={styles.yLabel}>{l}</span>)}
+          </div>
+          <div className={styles.barChart}>
+            {displayData.map((d, i) => (
+              <div key={i} className={styles.barCol}>
+                <div className={styles.barTrack} style={{ height: barH }}>
+                  <div className={styles.bar} style={{ height: `${(d.score / 4) * 100}%`, background: HEALTH_COLOR[d.score] }} />
+                </div>
+                <span className={styles.barLabel}>{d.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={styles.legend}>
+          {Object.entries(HEALTH_COLOR).reverse().map(([score, color]) => (
+            <div key={score} className={styles.legendItem}>
+              <span className={styles.legendDot} style={{ background: color }} />
+              <span>{HEALTH_LABEL[score]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className={styles.sectionTitle}>期間サマリー</p>
+      <div className={styles.healthGrid}>
+        <div className={styles.card} style={{ textAlign: "center" }}>
+          <p className={styles.cardLabel}>平均体調</p>
+          <p className={styles.cardValue} style={{ color: HEALTH_COLOR[Math.round(avgScore)] }}>{avgScore}</p>
+          <p style={{ fontSize: 11, color: "#aaa" }}>/ 4.0</p>
+        </div>
+        <div className={styles.card} style={{ textAlign: "center" }}>
+          <p className={styles.cardLabel}>好調な日</p>
+          <p className={styles.cardValue} style={{ color: "#4a7c59" }}>{goodDays}日</p>
+          <p style={{ fontSize: 11, color: "#aaa" }}>/ {displayData.length}日中</p>
+        </div>
+      </div>
+      <p className={styles.sectionTitle}>食事の記録</p>
+      <div className={styles.card}>
+        {displayData.map((d, i) => {
+          const mealScore = { "完食": 1, "半分": 0.75, "少し": 0.4, "食べていない": 0.1 };
+          const w = (mealScore[d.meal] || 0.5) * 100;
+          return (
+            <div key={i} className={styles.mealRow}>
+              <span className={styles.mealDate}>{d.date}</span>
+              <div className={styles.mealBarTrack}><div className={styles.mealBar} style={{ width: `${w}%` }} /></div>
+              <span className={styles.mealLabel}>{d.meal}</span>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -102,28 +227,6 @@ function HealthTab({ health, meal, memo, logs, setHealth, setMeal, setMemo, onSa
   );
 }
 
-function LocationTab({ now }) {
-  return (
-    <>
-      <p className={styles.sectionTitle}>現在地</p>
-      <div className={styles.locationMap}>
-        <div className={styles.mapDot} />
-        <p className={styles.mapLabel}>📍 自宅付近</p>
-        <p className={styles.mapTime}>最終更新：{fmt(now)}</p>
-      </div>
-      <p className={styles.sectionTitle}>行動履歴</p>
-      <div className={styles.locationHistory}>
-        {LOCATION_HISTORY.map((l, i) => (
-          <div key={i} className={styles.locItem}>
-            <span className={styles.locIcon}>{l.icon}</span>
-            <div><p className={styles.locName}>{l.name}</p><p className={styles.locTime}>{l.time}</p></div>
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
-
 function SosTab({ contacts, onSOS, onCall }) {
   return (
     <>
@@ -149,20 +252,10 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
   const [editing, setEditing] = useState(null);
   const [newC, setNewC]       = useState({ name: "", phone: "", relation: "" });
   const [showAdd, setShowAdd] = useState(false);
-
   const saveProfile = () => { save("miamori_profile", profile); showToast("✅ プロフィールを保存しました"); };
   const saveNotif   = () => { save("miamori_notification", notification); showToast("🔔 通知設定を保存しました"); };
-
-  const deleteContact = id => {
-    const u = contacts.filter(c => c.id !== id);
-    setContacts(u); save("miamori_contacts", u);
-    showToast("🗑️ 連絡先を削除しました");
-  };
-  const updateContact = c => {
-    const u = contacts.map(x => x.id === c.id ? c : x);
-    setContacts(u); save("miamori_contacts", u);
-    setEditing(null); showToast("✅ 連絡先を更新しました");
-  };
+  const deleteContact = id => { const u = contacts.filter(c => c.id !== id); setContacts(u); save("miamori_contacts", u); showToast("🗑️ 連絡先を削除しました"); };
+  const updateContact = c => { const u = contacts.map(x => x.id === c.id ? c : x); setContacts(u); save("miamori_contacts", u); setEditing(null); showToast("✅ 連絡先を更新しました"); };
   const addContact = () => {
     if (!newC.name || !newC.phone) { showToast("名前と電話番号を入力してください"); return; }
     const u = [...contacts, { ...newC, id: Date.now() }];
@@ -170,7 +263,6 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
     setNewC({ name: "", phone: "", relation: "" }); setShowAdd(false);
     showToast("✅ 連絡先を追加しました");
   };
-
   return (
     <>
       <p className={styles.sectionTitle}>👤 プロフィール設定</p>
@@ -187,12 +279,10 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
         </div>
         <button className={styles.saveBtn} onClick={saveProfile}>💾 保存する</button>
       </div>
-
       <div className={styles.sectionHeader}>
         <p className={styles.sectionTitle} style={{ margin: 0 }}>📞 緊急連絡先</p>
         <button className={styles.addBtn} onClick={() => setShowAdd(!showAdd)}>＋ 追加</button>
       </div>
-
       {showAdd && (
         <div className={styles.card} style={{ marginBottom: 12 }}>
           <p className={styles.formTitle}>新しい連絡先</p>
@@ -205,7 +295,6 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
           </div>
         </div>
       )}
-
       {contacts.map(c => (
         <div key={c.id} className={styles.card} style={{ marginBottom: 10 }}>
           {editing?.id === c.id ? (
@@ -234,7 +323,6 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
           )}
         </div>
       ))}
-
       <p className={styles.sectionTitle}>🔔 通知・リマインダー</p>
       <div className={styles.card}>
         <div className={styles.settingRow}>
@@ -252,7 +340,6 @@ function SettingsTab({ profile, setProfile, contacts, setContacts, notification,
         )}
         <button className={styles.saveBtn} onClick={saveNotif}>💾 保存する</button>
       </div>
-
       <p className={styles.sectionTitle}>🎨 テーマカラー</p>
       <div className={styles.themeGrid}>
         {THEMES.map(t => (
@@ -286,9 +373,7 @@ export default function App() {
   const [contacts, setContacts]         = useState(() => load("miamori_contacts", DEFAULT_CONTACTS));
   const [notification, setNotification] = useState(() => load("miamori_notification", DEFAULT_NOTIFICATION));
   const [themeId, setThemeId]           = useState(() => load("miamori_theme", "green"));
-
   const theme = THEMES.find(t => t.id === themeId) || THEMES[0];
-
   useEffect(() => {
     const r = document.documentElement;
     r.style.setProperty("--primary",      theme.primary);
@@ -296,24 +381,17 @@ export default function App() {
     r.style.setProperty("--bg",           theme.bg);
     r.style.setProperty("--card-bg",      theme.card);
   }, [themeId]);
-
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
-
-  const showToast = msg => {
-    setToast(msg); setToastVisible(true);
-    setTimeout(() => setToastVisible(false), 2500);
-  };
-
+  const showToast = msg => { setToast(msg); setToastVisible(true); setTimeout(() => setToastVisible(false), 2500); };
   const handleCheckin = () => {
     const t = fmt(new Date());
     setLastCheckin(t);
     setLogs(prev => [{ time: t, text: "✅ 安否確認完了" }, ...prev]);
     showToast("✅ 安否確認を送信しました");
   };
-
   const handleSaveHealth = () => {
     const t = fmt(new Date());
     const entries = [];
@@ -324,9 +402,9 @@ export default function App() {
     setLogs(prev => [...entries, ...prev]);
     setMemo(""); showToast("💾 記録を保存しました");
   };
-
   return (
     <div className={styles.app}>
+      <InstallBanner />
       <header className={styles.header}>
         <div className={styles.headerTop}>
           <div className={styles.appTitle}>みまもり<span>Care &amp; Connect</span></div>
@@ -347,7 +425,7 @@ export default function App() {
       <main className={styles.content}>
         {tab === "home"     && <HomeTab profile={profile} lastCheckin={lastCheckin} health={health} meal={meal} logs={logs} onCheckin={handleCheckin} />}
         {tab === "health"   && <HealthTab health={health} meal={meal} memo={memo} logs={logs} setHealth={setHealth} setMeal={setMeal} setMemo={setMemo} onSave={handleSaveHealth} />}
-        {tab === "location" && <LocationTab now={now} />}
+        {tab === "graph"    && <GraphTab logs={logs} />}
         {tab === "sos"      && <SosTab contacts={contacts} onSOS={() => showToast("🚨 緊急連絡先に通知を送りました！")} onCall={c => showToast(`📞 ${c.name}に発信中…`)} />}
         {tab === "settings" && <SettingsTab profile={profile} setProfile={setProfile} contacts={contacts} setContacts={setContacts} notification={notification} setNotification={setNotification} themeId={themeId} setThemeId={setThemeId} showToast={showToast} />}
       </main>
